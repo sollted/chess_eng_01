@@ -54,69 +54,53 @@ class ChessGUI:
         return self.pieces.get(self.piece_map.get(piece_value))
     
     def handle_click(self, pos):
-        # Convert pixel coordinates to board coordinates
+        # Convert screen coordinates to board coordinates
         col = pos[0] // self.SQUARE_SIZE
-        row = 7 - (pos[1] // self.SQUARE_SIZE)  # Flip row coordinate
+        row = pos[1] // self.SQUARE_SIZE
+        board_row = 7 - row  # Convert screen row to board row
+        board_col = col
         
-        # Adjust coordinates for black's turn
-        if self.board.turn == 1:
-            row = 7 - row
-        
-        # Only allow human moves during white's turn
-        if self.board.turn == -1:  # Black's turn
+        # Only handle clicks for white's turn
+        if self.board.turn == -1:
             return
         
+        # If no square is currently selected
         if self.selected_square is None:
-            # First click - select piece if it's valid
-            piece = self.board.board[row][col]
+            piece = self.board.board[board_row][board_col]
             if piece > 0:  # Only allow selecting white pieces
-                self.selected_square = (row, col)
-                
-                # Generate legal moves for the selected piece
+                self.selected_square = (board_row, board_col)
                 self.legal_moves = [
-                    move for move in self.board.generate_legal_moves()
-                    if move.start == (row, col)
+                    move for move in self.board.generate_legal_moves(is_pseudo=False)
+                    if move.start == (board_row, board_col)
                 ]
         else:
-            # Second click - attempt to make move
-            start = self.selected_square
-            end = (row, col)
-            move = Move(start, end, promotion=(row == 7 and self.board.board[start[0]][start[1]] == 1))
+            # Check if the clicked square is a valid move
+            move_made = False
+            for move in self.legal_moves:
+                if move.end == (board_row, board_col):
+                    # Make the move
+                    captured_piece, rights = self.board.make_move(move)
+                    self.board.turn *= -1
+                    move_made = True
+                    
+                    # After white's move, make black's move automatically
+                    black_move = self.board.find_best_move()
+                    if black_move:
+                        captured_piece, rights = self.board.make_move(black_move)
+                        self.board.turn *= -1
+                    break
             
-            # Check if move is legal
-            matching_move = next((m for m in self.legal_moves if m.start == move.start and m.end == move.end), None)
-            
-            if matching_move:
-                # Make the move
-                self.board.make_move(matching_move)
-                # Flip the board for the next player
-                self.board.flip_board()
-                self.board.white = not self.board.white
-
-                # AI makes a move for black
-                if self.board.turn == -1:  # Black's turn
-                    best_move = self.board.find_best_move(depth=6)  # Increase depth to at least 4
-                    if best_move:
-                        self.board.make_move(best_move)
-                        self.board.flip_board()
-                        self.board.white = not self.board.white
-            
+            # Clear selection
             self.selected_square = None
             self.legal_moves = []
-    
+
     def draw_board(self):
         for row in range(8):
             for col in range(8):
-                # Always keep white on top visually, but flip the visual board for black's turn
-                if self.board.turn == 1:  # White's turn
-                    # Invert piece values for white's turn
-                    board_row = row
-                    board_col = col
-                else:  # Black's turn
-                    board_row = 7 - row
-                    board_col = col
+                board_row = 7 - row  # Restore this inversion
+                board_col = col
                 
-                # Determine square color - base it on visual position (row, col), not board position
+                # Determine square color - base it on visual position (row, col)
                 if self.selected_square and self.selected_square == (board_row, board_col):
                     color = (255, 255, 0)  # Yellow for selected square
                 elif any(move.end == (board_row, board_col) for move in self.legal_moves):
@@ -136,11 +120,9 @@ class ChessGUI:
                 text_rect.topleft = (col * self.SQUARE_SIZE + 5, row * self.SQUARE_SIZE + 5)
                 self.screen.blit(text, text_rect)
                 
-                # Draw pieces
+                # Draw pieces - no more conditional inversion of piece values
                 piece_value = self.board.board[board_row][board_col]
                 if piece_value != 0:
-                    if self.board.turn == -1:  # If it's black's turn, invert the piece values
-                        piece_value = -piece_value
                     piece_img = self.get_piece_image(piece_value)
                     if piece_img:
                         self.screen.blit(piece_img, 
@@ -148,17 +130,29 @@ class ChessGUI:
 
     def run(self):
         running = True
+        clock = pygame.time.Clock()
+        
+        # Check for game over
+        def check_game_over():
+            is_over, result = self.board.game_over()
+            if is_over:
+                print(f"Game Over! Result: {result}")
+                return True
+            return False
+        
         while running:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     running = False
                 elif event.type == pygame.MOUSEBUTTONDOWN:
-                    self.handle_click(event.pos)
+                    if not check_game_over():  # Only allow moves if game isn't over
+                        self.handle_click(event.pos)
             
             self.screen.fill((255, 255, 255))
             self.draw_board()
-
             pygame.display.flip()
+            clock.tick(60)  # Limit to 60 FPS
+            
         pygame.quit()
 
 if __name__ == "__main__":

@@ -1,13 +1,27 @@
 import numpy as np
-from rights import *
 from tqdm import tqdm
+from rights import Move
+
+# Create a flag to switch between C++ and Python implementations
+USE_CPP_RIGHTS = True
+
+if USE_CPP_RIGHTS:
+    from rights_cpp import (
+        pawn as pawn,
+        knight as knight,
+        bishop as bishop,
+        rook as rook,
+        queen as queen,
+        king as king
+    )
+else:
+    from rights import pawn, knight, bishop, rook, queen, king
 
 class Board:
     
     def __init__(self):
         self.board = np.zeros((8, 8), dtype=int)
         self.turn = 1 # 1 for white, -1 for black
-        self.white = False
         self.castling_rights = {
             'w_king': True,
             'w_queen': True,
@@ -38,18 +52,44 @@ class Board:
             'queen': 9,
             'king': 100,
         }
-
-
-    def flip_board(self):
-        # Flip the board vertically and negate all pieces
-        self.board = -np.flipud(self.board)
-        self.white = not self.white
         
-        # Swap white and black castling rights
-        self.castling_rights['w_king'], self.castling_rights['b_king'] = \
-            self.castling_rights['b_king'], self.castling_rights['w_king']
-        self.castling_rights['w_queen'], self.castling_rights['b_queen'] = \
-            self.castling_rights['b_queen'], self.castling_rights['w_queen']
+        # Add piece-square tables as class attributes
+        self.pawn_table = np.array([
+            [ 0,  0,  0,  0,  0,  0,  0,  0],
+            [50, 50, 50, 50, 50, 50, 50, 50],
+            [10, 10, 20, 30, 30, 20, 10, 10],
+            [ 5,  5, 10, 25, 25, 10,  5,  5],
+            [ 0,  0,  0, 20, 20,  0,  0,  0],
+            [ 5, -5,-10,  0,  0,-10, -5,  5],
+            [ 5, 10, 10,-20,-20, 10, 10,  5],
+            [ 0,  0,  0,  0,  0,  0,  0,  0]
+        ])
+        
+        self.knight_table = np.array([
+            [-50,-40,-30,-30,-30,-30,-40,-50],
+            [-40,-20,  0,  0,  0,  0,-20,-40],
+            [-30,  0, 10, 15, 15, 10,  0,-30],
+            [-30,  5, 15, 20, 20, 15,  5,-30],
+            [-30,  0, 15, 20, 20, 15,  0,-30],
+            [-30,  5, 10, 15, 15, 10,  5,-30],
+            [-40,-20,  0,  5,  5,  0,-20,-40],
+            [-50,-40,-30,-30,-30,-30,-40,-50]
+        ])
+        
+        # Add position history to track repetitions
+        self.position_history = []
+        
+        # Add piece_values as a class attribute
+        self.piece_values = {
+            1: 100,    # Pawn
+            2: 320,    # Knight
+            3: 330,    # Bishop
+            4: 500,    # Rook
+            5: 900,    # Queen
+            6: 20000   # King
+        }
+
+        self.transposition_table = {}  # Add at class level in __init__
 
     def to_fen(self):
         fen = ""
@@ -156,15 +196,10 @@ class Board:
                 file += 1
 
     def in_check(self, white):
-        # if white is true, return true if white is in check
-        if white != self.white:
-            self.flip_board()
-            moves = self.generate_legal_moves(is_pseudo=True)
-            self.flip_board()
-        else:
-            moves = self.generate_legal_moves(is_pseudo=True)
+        # Generate opponent's moves directly
+        moves = self.generate_legal_moves(is_pseudo=True, for_white=(not white))
         
-        # Look for the king (6 for white king, -6 for black king)
+        # Look for the king
         king_value = 6 if white else -6
         kings = np.where(self.board == king_value)
         if kings[0].size > 0:
@@ -174,33 +209,56 @@ class Board:
                     return True
         return False
     
-    def generate_legal_moves(self, is_pseudo=False):
+    def generate_legal_moves(self, is_pseudo=False, for_white=None):
         moves = []
-        moves.extend(pawn(self.board))
-        moves.extend(knight(self.board))
-        moves.extend(bishop(self.board))
-        moves.extend(rook(self.board))
-        moves.extend(queen(self.board))
-        moves.extend(king(self.board, self.castling_rights))
+        # Store the original turn
+        original_turn = self.turn
+        
+        # Use provided color or current turn if not specified
+        """
+        if for_white is not None:
+            self.turn = 1 if for_white else -1
+        """
+        
+        try:
+            if self.turn == 1:  # White's moves
+                moves.extend(pawn(self.board, 1))
+                moves.extend(knight(self.board, 1))
+                moves.extend(bishop(self.board, 1))
+                moves.extend(rook(self.board, 1))
+                moves.extend(queen(self.board, 1))
+                moves.extend(king(self.board, 1, self.castling_rights))
+            else:  # Black's moves
+                moves.extend(pawn(self.board, -1))
+                moves.extend(knight(self.board, -1))
+                moves.extend(bishop(self.board, -1))
+                moves.extend(rook(self.board, -1))
+                moves.extend(queen(self.board, -1))
+                moves.extend(king(self.board, -1, self.castling_rights))
 
-        # If we flipped the board, flip it back and transform the move coordinates
-        if self.white:
-            # Transform moves to match original board orientation
-            for move in moves:
-                move.start = (7-move.start[0], move.start[1])
-                move.end = (7-move.end[0], move.end[1])
-
-        if not is_pseudo:
-            legal_moves = []
-            for move in moves:
-                piece, rights = self.make_move(move)
-                if not self.in_check(not self.white):  # Check if our king is safe after move
-                    legal_moves.append(move)
-                self.undo_move(move, piece, rights)
-            return legal_moves
-        return moves
+            if not is_pseudo:
+                legal_moves = []
+                for move in moves:
+                    piece, rights = self.make_move(move)
+                    if not self.in_check(self.turn == 1):  # Check if our king is safe after move
+                        legal_moves.append(move)
+                    self.undo_move(move, piece, rights)
+                return legal_moves
+            return moves
+        
+        finally:
+            # Always restore the original turn, even if an error occurs
+            self.turn = original_turn
 
     def make_move(self, move):
+        # Store position before making move
+        current_fen = self.to_fen().split(' ')[0]
+        self.position_history.append(current_fen)
+        
+        # Limit history length to prevent memory issues
+        if len(self.position_history) > 50:
+            self.position_history.pop(0)
+        
         # Store the piece at the end position (captured piece)
         captured_piece = self.board[move.end[0]][move.end[1]]
         moving_piece = self.board[move.start[0]][move.start[1]]
@@ -248,9 +306,6 @@ class Board:
         if move.promotion:
             self.board[move.end[0]][move.end[1]] = 5 if moving_piece > 0 else -5  # Promote to queen
         
-        # Switch turn
-        self.turn *= -1
-        
         return captured_piece, original_castling_rights
 
     def undo_move(self, move, captured_piece, original_castling_rights):
@@ -281,124 +336,183 @@ class Board:
         # Restore original castling rights
         self.castling_rights = original_castling_rights
         
-        # Switch turn back
-        self.turn *= -1
 
     def game_over(self):
         if len(self.generate_legal_moves()) == 0:
-            # If no legal moves and in check, it's checkmate
-            if self.in_check(not self.white):
-                return True, "black loss" if self.white else "white loss"
-            # If no legal moves but not in check, it's stalemate
+            if self.in_check(self.turn == 1):
+                return True, "black loss" if self.turn == 1 else "white loss"
             return True, "draw by stalemate"
         return False, "keep playing"
 
     def evaluate_board(self):
+        """
+        Evaluates the board position from White's perspective.
+        Positive values mean White is winning, negative values mean Black is winning.
+        """
         score = 0
         
-        # Material evaluation with slightly adjusted values
-        piece_values = {
-            'pawn': 100,    # Base value 1.0
-            'knight': 320,  # Base value 3.2
-            'bishop': 330,  # Base value 3.3
-            'rook': 500,    # Base value 5.0
-            'queen': 900,   # Base value 9.0
-            'king': 20000   # Very high to prioritize king safety
-        }
-        
-        for i in range(8):
-            for j in range(8):
-                piece = self.board[i][j]
+        # Material counting (most important factor)
+        for row in range(8):
+            for col in range(8):
+                piece = self.board[row][col]
                 if piece != 0:
-                    # Get piece type (pawn, knight, etc.)
-                    piece_type = list(self.pieces.keys())[list(self.pieces.values()).index(abs(piece))].split('_')[1]
+                    # Base piece value
+                    value = self.piece_values[abs(piece)]
+                    score += value if piece > 0 else -value
+        
+        # Simple positional bonuses
+        for row in range(8):
+            for col in range(8):
+                piece = self.board[row][col]
+                if piece != 0:
+                    # Center control (small bonus)
+                    if 2 <= row <= 5 and 2 <= col <= 5:
+                        score += 10 if piece > 0 else -10
                     
-                    # Add material value
-                    score += piece_values[piece_type] * (1 if piece > 0 else -1)
-                    
-                    # Simple positional bonuses
+                    # Pawn structure
                     if abs(piece) == 1:  # Pawns
                         # Bonus for advanced pawns
-                        if piece > 0:
-                            score += i * 10  # More points as pawn advances
-                        else:
-                            score -= (7-i) * 10
-                    
-                    # Small bonus for controlling center with any piece
-                    if 2 <= i <= 5 and 2 <= j <= 5:
-                        score += 10 * (1 if piece > 0 else -1)
+                        if piece > 0:  # White pawns
+                            score += (row - 1) * 10
+                        else:  # Black pawns
+                            score -= (6 - row) * 10
+        
+        # King safety (simplified)
+        white_king_pos = np.where(self.board == 6)
+        black_king_pos = np.where(self.board == -6)
+        
+        if white_king_pos[0].size > 0 and black_king_pos[0].size > 0:
+            w_king = (white_king_pos[0][0], white_king_pos[1][0])
+            b_king = (black_king_pos[0][0], black_king_pos[1][0])
+            
+            # Penalize exposed kings
+            if w_king[0] > 1:  # White king moved away from back rank
+                score -= 50
+            if b_king[0] < 6:  # Black king moved away from back rank
+                score += 50
+        
+        # Mobility (simplified)
+        self.turn = 1  # Temporarily set turn to white
+        white_moves = len(self.generate_legal_moves())
+        self.turn = -1  # Set turn to black
+        black_moves = len(self.generate_legal_moves())
+        self.turn = 1  # Restore original turn
+        
+        score += (white_moves - black_moves) * 5  # Small bonus for mobility
         
         return score
     
-    def find_best_move(self, depth=5):
-        def minimax(depth, alpha, beta, maximizing_player):
-            if depth == 0:
-                # Don't negate the evaluation since board flipping already handles perspective
-                return self.evaluate_board()
+    def find_best_move(self, depth=3):
+        """
+        Optimized version with move ordering, transposition table, and basic quiescence search
+        """
+        def move_value(move):
+            """Order moves to improve alpha-beta pruning efficiency"""
+            piece = self.board[move.start[0]][move.start[1]]
+            captured = self.board[move.end[0]][move.end[1]]
             
-            # Check for game over
-            is_over, result = self.game_over()
-            if is_over:
-                if result == "white loss":
-                    return -1000
-                elif result == "black loss":
-                    return 1000
-                else:  # Draw
-                    return 0
+            # Base score: MVV-LVA (Most Valuable Victim - Least Valuable Attacker)
+            score = 0
+            if captured != 0:
+                score = 10 * self.piece_values[abs(captured)] - self.piece_values[abs(piece)]
+            
+            # Bonus for promotions
+            if move.promotion:
+                score += 900
+            
+            # Bonus for attacking center squares
+            if 2 <= move.end[0] <= 5 and 2 <= move.end[1] <= 5:
+                score += 10
+            
+            return score
 
-            if maximizing_player:
-                max_eval = float('-inf')
-                moves = self.generate_legal_moves()
-                for move in moves:
-                    piece, rights = self.make_move(move)
-                    eval = minimax(depth - 1, alpha, beta, False)
-                    self.undo_move(move, piece, rights)
-                    max_eval = max(max_eval, eval)
-                    alpha = max(alpha, eval)
-                    if beta <= alpha:
-                        break  # Beta cut-off
-                return max_eval
-            else:
-                min_eval = float('inf')
-                moves = self.generate_legal_moves()
-                for move in moves:
-                    piece, rights = self.make_move(move)
-                    eval = minimax(depth - 1, alpha, beta, True)
-                    self.undo_move(move, piece, rights)
-                    min_eval = min(min_eval, eval)
-                    beta = min(beta, eval)
-                    if beta <= alpha:
-                        break  # Alpha cut-off
-                return min_eval
+        def quiescence_search(alpha, beta, depth=0, max_depth=4):
+            """Search capture moves to avoid horizon effect"""
+            stand_pat = self.evaluate_board()
+            
+            if stand_pat >= beta:
+                return beta
+            if stand_pat > alpha:
+                alpha = stand_pat
+            if depth >= max_depth:
+                return alpha
 
-        best_move = None
-        # Always maximize since board flipping handles perspective
-        best_value = float('-inf')
-        alpha = float('-inf')
-        beta = float('inf')
-        
-        legal_moves = self.generate_legal_moves()
-        
-        if not legal_moves:
-            return None
-        
-        # Add progress bar
-        with tqdm(total=len(legal_moves), desc=f"Searching depth {depth}") as pbar:
-            # Evaluate each move
-            for move in legal_moves:
+            # Only look at captures
+            moves = [move for move in self.generate_legal_moves() 
+                    if self.board[move.end[0]][move.end[1]] != 0]
+            moves.sort(key=move_value, reverse=True)
+
+            for move in moves:
                 piece, rights = self.make_move(move)
-                value = minimax(depth - 1, alpha, beta, False)
+                self.turn *= -1
+                score = -quiescence_search(-beta, -alpha, depth + 1)
+                self.turn *= -1
                 self.undo_move(move, piece, rights)
                 
-                if value > best_value:
-                    best_value = value
-                    best_move = move
-                alpha = max(alpha, value)
-                
-                # Update progress bar
-                pbar.update(1)
-                
-                if beta <= alpha:
-                    break
-        
+                if score >= beta:
+                    return beta
+                if score > alpha:
+                    alpha = score
+
+            return alpha
+
+        def minimax(depth, alpha, beta, maximizing_player):
+            # Check transposition table
+            board_hash = hash(str(self.board.tobytes()) + str(maximizing_player))
+            if board_hash in self.transposition_table:
+                stored_depth, stored_value, stored_move = self.transposition_table[board_hash]
+                if stored_depth >= depth:
+                    return stored_value, stored_move
+
+            if depth == 0:
+                return quiescence_search(alpha, beta), None
+
+            legal_moves = self.generate_legal_moves()
+            if not legal_moves:
+                return -20000 if maximizing_player else 20000, None
+
+            # Move ordering - sort moves by their estimated value
+            legal_moves.sort(key=move_value, reverse=True)
+            
+            best_move = None
+            if maximizing_player:
+                max_eval = float('-inf')
+                for move in legal_moves:
+                    piece, rights = self.make_move(move)
+                    self.turn *= -1
+                    eval, _ = minimax(depth - 1, alpha, beta, False)
+                    self.turn *= -1
+                    self.undo_move(move, piece, rights)
+                    
+                    if eval > max_eval:
+                        max_eval = eval
+                        best_move = move
+                    alpha = max(alpha, eval)
+                    if beta <= alpha:
+                        break
+                # Store in transposition table
+                self.transposition_table[board_hash] = (depth, max_eval, best_move)
+                return max_eval, best_move
+            else:
+                min_eval = float('inf')
+                for move in legal_moves:
+                    piece, rights = self.make_move(move)
+                    self.turn *= -1
+                    eval, _ = minimax(depth - 1, alpha, beta, True)
+                    self.turn *= -1
+                    self.undo_move(move, piece, rights)
+                    
+                    if eval < min_eval:
+                        min_eval = eval
+                        best_move = move
+                    beta = min(beta, eval)
+                    if beta <= alpha:
+                        break
+                # Store in transposition table
+                self.transposition_table[board_hash] = (depth, min_eval, best_move)
+                return min_eval, best_move
+
+        # Call minimax with initial parameters
+        _, best_move = minimax(depth, float('-inf'), float('inf'), self.turn == 1)
         return best_move
+    
