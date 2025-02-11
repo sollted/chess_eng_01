@@ -402,7 +402,7 @@ class Board:
         
         return score
     
-    def find_best_move(self, depth=3):
+    def find_best_move(self, depth=4):
         """
         Optimized version with move ordering, transposition table, and basic quiescence search
         """
