@@ -1,0 +1,39 @@
+# Binaries and build artifacts
+./reng/target/
+./rust_eng
+Cargo.lock
+
+# Rust and Cargo metadata
+**/*.rs.bk
+**/*.rs.swp
+**/*.rs.swo
+
+# IDEs and editors
+.idea/
+.vscode/
+*.iml
+
+# Dependencies and generated files
+Cargo.lock
+*.rlib
+*.rmeta
+
+# Logs and temporary files
+*.log
+*.tmp
+*.swp
+*.swo
+*.bak
+
+# Debug and profiling tools
+*.profdata
+*.gcda
+*.gcno
+
+# Rustup and Cargo cache
+.cargo/
+rust-toolchain
+
+# macOS and system files
+.DS_Store
+*.dSYM/
