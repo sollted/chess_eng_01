@@ -739,26 +739,65 @@ impl ChessBoard {
         let mut score = 0;
 
         // Count material for both sides
-        let white_score = (self.w_pawn.count_ones() as i32) * 1
-            + (self.w_knight.count_ones() as i32) * 3
-            + (self.w_bishop.count_ones() as i32) * 3
-            + (self.w_rook.count_ones() as i32) * 5
-            + (self.w_queen.count_ones() as i32) * 9
-            + (self.w_king.count_ones() as i32) * 100;
+        let mut white_score = (self.w_pawn.count_ones() as i32) * 100
+            + (self.w_knight.count_ones() as i32) * 300
+            + (self.w_bishop.count_ones() as i32) * 300
+            + (self.w_rook.count_ones() as i32) * 500
+            + (self.w_queen.count_ones() as i32) * 900
+            + (self.w_king.count_ones() as i32) * 10000;
 
-        let black_score = (self.b_pawn.count_ones() as i32) * 1
-            + (self.b_knight.count_ones() as i32) * 3
-            + (self.b_bishop.count_ones() as i32) * 3
-            + (self.b_rook.count_ones() as i32) * 5
-            + (self.b_queen.count_ones() as i32) * 9
-            + (self.b_king.count_ones() as i32) * 100;
+        let mut black_score = (self.b_pawn.count_ones() as i32) * 100
+            + (self.b_knight.count_ones() as i32) * 300
+            + (self.b_bishop.count_ones() as i32) * 300
+            + (self.b_rook.count_ones() as i32) * 500
+            + (self.b_queen.count_ones() as i32) * 900
+            + (self.b_king.count_ones() as i32) * 10000;
 
-        // Calculate score as material difference
-        score = if for_white {
+        // Center squares (e4, d4, e5, d5)
+        let center = 0x0000001818000000u64;
+        // Extended center (16 squares around center)
+        let extended_center = 0x00003C3C3C3C0000u64;
+
+        // Add bonuses for center control
+        white_score += (self.w_pawn & center).count_ones() as i32 * 50;
+        white_score += (self.w_knight & center).count_ones() as i32 * 30;
+        white_score += (self.w_bishop & center).count_ones() as i32 * 20;
+        white_score += (self.w_pawn & extended_center).count_ones() as i32 * 20;
+        white_score += (self.w_knight & extended_center).count_ones() as i32 * 15;
+        white_score += (self.w_bishop & extended_center).count_ones() as i32 * 10;
+
+        black_score += (self.b_pawn & center).count_ones() as i32 * 50;
+        black_score += (self.b_knight & center).count_ones() as i32 * 30;
+        black_score += (self.b_bishop & center).count_ones() as i32 * 20;
+        black_score += (self.b_pawn & extended_center).count_ones() as i32 * 20;
+        black_score += (self.b_knight & extended_center).count_ones() as i32 * 15;
+        black_score += (self.b_bishop & extended_center).count_ones() as i32 * 10;
+
+        // Calculate material ratio factor
+        let white_total = white_score;
+        let black_total = black_score;
+        let total_material = white_total + black_total;
+
+        // Base score difference
+        let mut score = if for_white {
             white_score - black_score
         } else {
             black_score - white_score
         };
+
+        // Apply material ratio bonus/penalty
+        if total_material > 0 {
+            let ratio = if for_white {
+                white_total as f32 / total_material as f32
+            } else {
+                black_total as f32 / total_material as f32
+            };
+
+            // If we have more material (ratio > 0.5), encourage trading by adding a bonus
+            // If we have less material (ratio < 0.5), discourage trading by reducing our score
+            let ratio_bonus = ((ratio - 0.5) * 100.0) as i32;
+            score += ratio_bonus * (total_material / 1000); // Scale bonus with total material
+        }
 
         score
         //}}}
@@ -766,25 +805,28 @@ impl ChessBoard {
     pub fn get_computer_move(&mut self, depth: i32) -> Move {
         //{{{
         let moves = self.legal_moves(self.turn, false);
-        let mut best_score = i32::MIN;  // Always looking for maximum from current player's perspective
+        let mut best_score = -20000;
         let mut best_move = moves[0].clone();
+        let mut alpha = -20000;
+        let beta = 20000;
 
         for mv in moves {
             let mut board_copy = self.clone();
             board_copy.make_move(&mv);
-            let score = -board_copy.minimax(depth - 1);  // Negamax style
+            let score = -board_copy.alpha_beta(depth - 1, -beta, -alpha);
             
             if score > best_score {
                 best_score = score;
-                best_move = mv;
+                best_move = mv.clone();
             }
+            alpha = alpha.max(best_score);
         }
 
         best_move
         //}}}
     }
-
-    fn minimax(&mut self, depth: i32) -> i32 {
+    fn alpha_beta(&mut self, depth: i32, mut alpha: i32, beta: i32) -> i32 {
+        //{{{
         if depth == 0 {
             return self.evaluate_board(self.turn);
         }
@@ -799,17 +841,23 @@ impl ChessBoard {
             return 0; // Stalemate
         }
 
-        let mut best_score = i32::MIN;
+        let mut best_score = -20000; // Using a large but safe number instead of i32::MIN
 
         for mv in moves {
             let mut board_copy = self.clone();
             board_copy.make_move(&mv);
-            let score = -board_copy.minimax(depth - 1);  // Negamax style
+            let score = -board_copy.alpha_beta(depth - 1, -beta, -alpha);
             best_score = best_score.max(score);
+            alpha = alpha.max(best_score);
+            
+            if alpha >= beta {
+                break; // Beta cutoff
+            }
         }
 
         best_score
     }
+    //}}}
 }
 
 #[derive(Debug, Clone)]

@@ -1,0 +1,1 @@
+/Users/adambarta/Documents/GitHub/chess_eng_01/reng/target/release/libreng.rlib: /Users/adambarta/Documents/GitHub/chess_eng_01/reng/src/board.rs /Users/adambarta/Documents/GitHub/chess_eng_01/reng/src/lib.rs

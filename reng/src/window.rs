@@ -57,7 +57,10 @@ impl GameWindow {
     pub fn update(&mut self) {
         // If it's black's turn, make a computer move
         if !self.board.turn {  // false means black's turn
+            let start_time = std::time::Instant::now();
             let computer_move = self.board.get_computer_move(3);
+            let duration = start_time.elapsed();
+            println!("Computer move took: {:?}", duration);
             self.board.make_move(&computer_move);
             return;
         }
